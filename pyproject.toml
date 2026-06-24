@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-shannonbase"
+version = "0.1.0"
+description = "LangChain VectorStore for MySQL 9's native VECTOR type."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Apoorva Verma" }]
+dependencies = [
+    "langchain-core>=0.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langchain_shannonbase"]
