@@ -20,3 +20,14 @@ def vector_literal(embedding: List[float]) -> str:
     return json.dumps([float(x) for x in embedding])
 
 
+def create_table_sql(table: str, dim: int) -> str:
+    return (
+        f"CREATE TABLE IF NOT EXISTS `{table}` ("
+        "  id VARCHAR(36) PRIMARY KEY,"
+        "  content TEXT,"
+        "  metadata JSON,"
+        f"  embedding VECTOR({dim})"
+        ")"
+    )
+
+
