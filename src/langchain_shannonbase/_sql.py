@@ -15,3 +15,8 @@ from typing import List
 _METRICS = {"cosine": "COSINE", "dot": "DOT", "euclidean": "EUCLIDEAN"}
 
 
+def vector_literal(embedding: List[float]) -> str:
+    """Serialize a vector to the JSON-array string STRING_TO_VECTOR expects."""
+    return json.dumps([float(x) for x in embedding])
+
+
