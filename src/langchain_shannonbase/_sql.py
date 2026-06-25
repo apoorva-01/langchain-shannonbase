@@ -1,0 +1,17 @@
+"""SQL for MySQL 9's native VECTOR type (ShannonBase / MySQL / HeatWave).
+
+Kept as pure string builders so they can be unit-tested without a database.
+Embeddings are passed to MySQL as a JSON array string via STRING_TO_VECTOR(),
+and cosine distance comes from the native DISTANCE(a, b, 'COSINE') function.
+similarity = 1 - distance.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import List
+
+# Distance metric -> MySQL DISTANCE() metric name.
+_METRICS = {"cosine": "COSINE", "dot": "DOT", "euclidean": "EUCLIDEAN"}
+
+
