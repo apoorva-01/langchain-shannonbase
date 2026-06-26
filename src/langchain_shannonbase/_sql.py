@@ -41,3 +41,14 @@ def insert_sql(table: str) -> str:
     )
 
 
+def search_sql(table: str, metric: str = "cosine") -> str:
+    m = _METRICS.get(metric)
+    if m is None:
+        raise ValueError(f"unknown metric {metric!r}; use one of {list(_METRICS)}")
+    return (
+        "SELECT id, content, metadata, "
+        f"DISTANCE(embedding, STRING_TO_VECTOR(%s), '{m}') AS dist "
+        f"FROM `{table}` ORDER BY dist ASC LIMIT %s"
+    )
+
+
