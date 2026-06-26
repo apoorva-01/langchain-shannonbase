@@ -57,3 +57,6 @@ def delete_sql(table: str, n_ids: int) -> str:
     return f"DELETE FROM `{table}` WHERE id IN ({placeholders})"
 
 
+def distance_to_score(distance: float) -> float:
+    """Convert a cosine distance to a [0, 1]-ish similarity score."""
+    return 1.0 - float(distance)
