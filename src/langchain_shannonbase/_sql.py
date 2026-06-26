@@ -31,3 +31,13 @@ def create_table_sql(table: str, dim: int) -> str:
     )
 
 
+def insert_sql(table: str) -> str:
+    """Upsert one row. Embedding bind param is wrapped in STRING_TO_VECTOR()."""
+    return (
+        f"INSERT INTO `{table}` (id, content, metadata, embedding) "
+        "VALUES (%s, %s, %s, STRING_TO_VECTOR(%s)) "
+        "AS new ON DUPLICATE KEY UPDATE "
+        "content = new.content, metadata = new.metadata, embedding = new.embedding"
+    )
+
+
