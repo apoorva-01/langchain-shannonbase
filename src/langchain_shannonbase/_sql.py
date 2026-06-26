@@ -52,3 +52,8 @@ def search_sql(table: str, metric: str = "cosine") -> str:
     )
 
 
+def delete_sql(table: str, n_ids: int) -> str:
+    placeholders = ", ".join(["%s"] * n_ids)
+    return f"DELETE FROM `{table}` WHERE id IN ({placeholders})"
+
+
