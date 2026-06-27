@@ -91,3 +91,28 @@ class MySQLStore:
             conn.close()
 
 
+class InMemoryStore:
+    """Deterministic offline backend that mirrors MySQLStore's cosine behavior."""
+
+    def __init__(self):
+        self._rows: dict[str, Tuple[str, dict, List[float]]] = {}
+
+    def ensure_table(self, dim: int) -> None:
+        pass
+
+    def upsert(self, rows):
+        for rid, content, meta, emb in rows:
+            self._rows[rid] = (content, dict(meta or {}), list(emb))
+
+    def search(self, embedding, k, metric):
+        scored = []
+        for rid, (content, meta, emb) in self._rows.items():
+            scored.append(Row(rid, content, meta, _cosine_distance(embedding, emb)))
+        scored.sort(key=lambda r: r.distance)
+        return scored[:k]
+
+    def delete(self, ids):
+        for i in ids:
+            self._rows.pop(i, None)
+
+
