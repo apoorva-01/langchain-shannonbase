@@ -31,3 +31,63 @@ class Store(Protocol):
     def delete(self, ids: List[str]) -> None: ...
 
 
+class MySQLStore:
+    """Real backend. Requires: pip install 'langchain-shannonbase[mysql]'."""
+
+    def __init__(self, table: str, **connection_kwargs):
+        import mysql.connector  # noqa: F401  (lazy; validates the extra is installed)
+        self.table = table
+        self._conn_kwargs = connection_kwargs
+
+    def _connect(self):
+        import mysql.connector
+        return mysql.connector.connect(**self._conn_kwargs)
+
+    def ensure_table(self, dim: int) -> None:
+        conn = self._connect()
+        try:
+            conn.cursor().execute(_sql.create_table_sql(self.table, dim))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def upsert(self, rows):
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            stmt = _sql.insert_sql(self.table)
+            cur.executemany(
+                stmt,
+                [(rid, content, json.dumps(meta), _sql.vector_literal(emb))
+                 for rid, content, meta, emb in rows],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def search(self, embedding, k, metric):
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(_sql.search_sql(self.table, metric),
+                        (_sql.vector_literal(embedding), k))
+            out = []
+            for rid, content, meta, dist in cur.fetchall():
+                md = meta if isinstance(meta, dict) else json.loads(meta or "{}")
+                out.append(Row(rid, content, md, float(dist)))
+            return out
+        finally:
+            conn.close()
+
+    def delete(self, ids):
+        if not ids:
+            return
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(_sql.delete_sql(self.table, len(ids)), tuple(ids))
+            conn.commit()
+        finally:
+            conn.close()
+
+
