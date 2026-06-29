@@ -75,3 +75,12 @@ class ShannonBaseVectorStore(VectorStore):
         self._store.upsert(rows)
         return ids
 
+    def similarity_search(self, query: str, k: int = 4, **kwargs: Any) -> List[Document]:
+        return [doc for doc, _ in self.similarity_search_with_score(query, k, **kwargs)]
+
+    def similarity_search_with_score(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> List[Tuple[Document, float]]:
+        vector = self._embedding.embed_query(query)
+        return self.similarity_search_by_vector_with_score(vector, k, **kwargs)
+
