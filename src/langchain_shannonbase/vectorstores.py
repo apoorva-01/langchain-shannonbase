@@ -55,3 +55,23 @@ class ShannonBaseVectorStore(VectorStore):
             self._dim = dim
             self._store.ensure_table(dim)
 
+    def add_texts(
+        self,
+        texts: Iterable[str],
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> List[str]:
+        texts = list(texts)
+        if not texts:
+            return []
+        vectors = self._embedding.embed_documents(texts)
+        self._ensure_dim(len(vectors[0]))
+        metadatas = metadatas or [{} for _ in texts]
+        ids = ids or [str(uuid.uuid4()) for _ in texts]
+        rows: List[Tuple[str, str, dict, List[float]]] = [
+            (ids[i], texts[i], metadatas[i], vectors[i]) for i in range(len(texts))
+        ]
+        self._store.upsert(rows)
+        return ids
+
