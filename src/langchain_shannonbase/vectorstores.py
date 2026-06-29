@@ -84,3 +84,19 @@ class ShannonBaseVectorStore(VectorStore):
         vector = self._embedding.embed_query(query)
         return self.similarity_search_by_vector_with_score(vector, k, **kwargs)
 
+    def similarity_search_by_vector(
+        self, embedding: List[float], k: int = 4, **kwargs: Any
+    ) -> List[Document]:
+        return [doc for doc, _ in self.similarity_search_by_vector_with_score(embedding, k)]
+
+    def similarity_search_by_vector_with_score(
+        self, embedding: List[float], k: int = 4, **kwargs: Any
+    ) -> List[Tuple[Document, float]]:
+        rows = self._store.search(embedding, k, self.metric)
+        # DISTANCE is smaller-is-closer; expose it as a score (1 - distance).
+        return [
+            (Document(page_content=r.content, metadata={**r.metadata, "id": r.id}),
+             1.0 - r.distance)
+            for r in rows
+        ]
+
