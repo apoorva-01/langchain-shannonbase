@@ -100,3 +100,9 @@ class ShannonBaseVectorStore(VectorStore):
             for r in rows
         ]
 
+    def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
+        if not ids:
+            return False
+        self._store.delete(ids)
+        return True
+
