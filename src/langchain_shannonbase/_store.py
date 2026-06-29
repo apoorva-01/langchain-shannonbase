@@ -116,3 +116,10 @@ class InMemoryStore:
             self._rows.pop(i, None)
 
 
+def _cosine_distance(a: List[float], b: List[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0 or nb == 0:
+        return 1.0
+    return 1.0 - dot / (na * nb)
