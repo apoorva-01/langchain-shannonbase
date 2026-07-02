@@ -106,3 +106,18 @@ class ShannonBaseVectorStore(VectorStore):
         self._store.delete(ids)
         return True
 
+    @classmethod
+    def from_texts(
+        cls,
+        texts: List[str],
+        embedding: Embeddings,
+        metadatas: Optional[List[dict]] = None,
+        table: str = "langchain_vectors",
+        metric: str = "cosine",
+        store: Optional[Store] = None,
+        ids: Optional[List[str]] = None,
+        **connection_kwargs: Any,
+    ) -> "ShannonBaseVectorStore":
+        vs = cls(embedding=embedding, table=table, metric=metric, store=store, **connection_kwargs)
+        vs.add_texts(texts, metadatas=metadatas, ids=ids)
+        return vs
