@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "langchain-shannonbase"
 version = "0.1.0"
-description = "LangChain VectorStore for MySQL 9's native VECTOR type."
+description = "LangChain VectorStore for MySQL 9's native VECTOR type — works with ShannonBase, self-hosted MySQL, and MySQL HeatWave."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -21,6 +21,14 @@ classifiers = [
 dependencies = [
     "langchain-core>=0.3",
 ]
+
+[project.optional-dependencies]
+mysql = ["mysql-connector-python>=8.3"]
+dev = ["pytest>=7.0", "mysql-connector-python>=8.3"]
+
+[project.urls]
+Homepage = "https://github.com/apoorva-01/langchain-shannonbase"
+Issues = "https://github.com/apoorva-01/langchain-shannonbase/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/langchain_shannonbase"]
