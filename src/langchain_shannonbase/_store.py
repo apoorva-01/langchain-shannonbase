@@ -127,6 +127,15 @@ class InMemoryStore:
         scored.sort(key=lambda r: r.distance)
         return scored[:k]
 
+    def get(self, ids):
+        out = []
+        for i in ids:
+            row = self._rows.get(i)
+            if row is not None:
+                content, meta, _ = row
+                out.append(Row(i, content, dict(meta), 0.0))
+        return out
+
     def delete(self, ids):
         for i in ids:
             self._rows.pop(i, None)
