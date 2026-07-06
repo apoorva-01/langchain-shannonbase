@@ -80,6 +80,21 @@ class MySQLStore:
         finally:
             conn.close()
 
+    def get(self, ids):
+        if not ids:
+            return []
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(_sql.select_by_ids_sql(self.table, len(ids)), tuple(ids))
+            out = []
+            for rid, content, meta in cur.fetchall():
+                md = meta if isinstance(meta, dict) else json.loads(meta or "{}")
+                out.append(Row(rid, content, md, 0.0))
+            return out
+        finally:
+            conn.close()
+
     def delete(self, ids):
         if not ids:
             return
