@@ -71,7 +71,7 @@ def test_delete_removes_document():
     vs.add_texts(["keep me", "delete me"], ids=["keep", "del"])
     assert vs.delete(["del"]) is True
     remaining = vs.similarity_search("me", k=10)
-    assert all(d.metadata["id"] != "del" for d in remaining)
+    assert all(d.id != "del" for d in remaining)
 
 
 def test_from_texts_classmethod():
