@@ -95,7 +95,7 @@ class ShannonBaseVectorStore(VectorStore):
         rows = self._store.search(embedding, k, self.metric)
         # DISTANCE is smaller-is-closer; expose it as a score (1 - distance).
         return [
-            (Document(page_content=r.content, metadata={**r.metadata, "id": r.id}),
+            (Document(id=r.id, page_content=r.content, metadata=dict(r.metadata)),
              1.0 - r.distance)
             for r in rows
         ]
