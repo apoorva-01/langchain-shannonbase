@@ -100,6 +100,15 @@ class ShannonBaseVectorStore(VectorStore):
             for r in rows
         ]
 
+    def get_by_ids(self, ids: Iterable[str]) -> List[Document]:
+        ids = list(ids)
+        found = {r.id: r for r in self._store.get(ids)}
+        return [
+            Document(id=i, page_content=found[i].content, metadata=dict(found[i].metadata))
+            for i in ids
+            if i in found
+        ]
+
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         if not ids:
             return False
