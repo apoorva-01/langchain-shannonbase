@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mysql = ["mysql-connector-python>=8.3"]
-dev = ["pytest>=7.0", "mysql-connector-python>=8.3"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "mysql-connector-python>=8.3", "langchain-tests>=0.3"]
 
 [project.urls]
 Homepage = "https://github.com/apoorva-01/langchain-shannonbase"
@@ -32,3 +32,6 @@ Issues = "https://github.com/apoorva-01/langchain-shannonbase/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/langchain_shannonbase"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
