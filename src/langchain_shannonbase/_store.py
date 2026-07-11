@@ -22,12 +22,14 @@ class Row:
     content: str
     metadata: dict
     distance: float
+    embedding: Optional[List[float]] = None
 
 
 class Store(Protocol):
     def ensure_table(self, dim: int) -> None: ...
     def upsert(self, rows: List[Tuple[str, str, dict, List[float]]]) -> None: ...
-    def search(self, embedding: List[float], k: int, metric: str) -> List[Row]: ...
+    def search(self, embedding: List[float], k: int, metric: str,
+               filter: Optional[dict] = None, with_vector: bool = False) -> List[Row]: ...
     def get(self, ids: List[str]) -> List[Row]: ...
     def delete(self, ids: List[str]) -> None: ...
 
@@ -66,16 +68,26 @@ class MySQLStore:
         finally:
             conn.close()
 
-    def search(self, embedding, k, metric):
+    def search(self, embedding, k, metric, filter=None, with_vector=False):
+        keys = tuple((filter or {}).keys())
+        vals = [(filter or {})[key] for key in keys]
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute(_sql.search_sql(self.table, metric),
-                        (_sql.vector_literal(embedding), k))
+            cur.execute(
+                _sql.search_sql(self.table, metric, filter_keys=keys, with_vector=with_vector),
+                (_sql.vector_literal(embedding), *vals, k),
+            )
             out = []
-            for rid, content, meta, dist in cur.fetchall():
+            for row in cur.fetchall():
+                if with_vector:
+                    rid, content, meta, emb, dist = row
+                    vec = json.loads(emb) if emb else None
+                else:
+                    rid, content, meta, dist = row
+                    vec = None
                 md = meta if isinstance(meta, dict) else json.loads(meta or "{}")
-                out.append(Row(rid, content, md, float(dist)))
+                out.append(Row(rid, content, md, float(dist), vec))
             return out
         finally:
             conn.close()
@@ -120,10 +132,13 @@ class InMemoryStore:
         for rid, content, meta, emb in rows:
             self._rows[rid] = (content, dict(meta or {}), list(emb))
 
-    def search(self, embedding, k, metric):
+    def search(self, embedding, k, metric, filter=None, with_vector=False):
         scored = []
         for rid, (content, meta, emb) in self._rows.items():
-            scored.append(Row(rid, content, meta, _cosine_distance(embedding, emb)))
+            if filter and any(meta.get(key) != val for key, val in filter.items()):
+                continue
+            scored.append(Row(rid, content, meta, _cosine_distance(embedding, emb),
+                              list(emb) if with_vector else None))
         scored.sort(key=lambda r: r.distance)
         return scored[:k]
 

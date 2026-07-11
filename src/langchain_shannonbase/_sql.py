@@ -9,10 +9,15 @@ similarity = 1 - distance.
 from __future__ import annotations
 
 import json
+import re
 from typing import List
 
 # Distance metric -> MySQL DISTANCE() metric name.
 _METRICS = {"cosine": "COSINE", "dot": "DOT", "euclidean": "EUCLIDEAN"}
+
+# Metadata keys go into the SQL text (as a JSON path), so they must be identifiers.
+# Values are always bound as parameters, never interpolated.
+_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def vector_literal(embedding: List[float]) -> str:
@@ -41,14 +46,23 @@ def insert_sql(table: str) -> str:
     )
 
 
-def search_sql(table: str, metric: str = "cosine") -> str:
+def search_sql(table: str, metric: str = "cosine", filter_keys=(), with_vector: bool = False) -> str:
     m = _METRICS.get(metric)
     if m is None:
         raise ValueError(f"unknown metric {metric!r}; use one of {list(_METRICS)}")
+    for key in filter_keys:
+        if not _KEY.match(key):
+            raise ValueError(f"invalid filter key {key!r}; must be an identifier")
+    cols = "id, content, metadata"
+    if with_vector:
+        cols += ", VECTOR_TO_STRING(embedding) AS emb"
+    where = ""
+    if filter_keys:
+        where = " WHERE " + " AND ".join(f"metadata->>'$.{key}' = %s" for key in filter_keys)
     return (
-        "SELECT id, content, metadata, "
+        f"SELECT {cols}, "
         f"DISTANCE(embedding, STRING_TO_VECTOR(%s), '{m}') AS dist "
-        f"FROM `{table}` ORDER BY dist ASC LIMIT %s"
+        f"FROM `{table}`{where} ORDER BY dist ASC LIMIT %s"
     )
 
 
