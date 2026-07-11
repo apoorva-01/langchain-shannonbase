@@ -5,6 +5,7 @@ which all share the same VECTOR / STRING_TO_VECTOR / DISTANCE surface.
 
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -87,12 +88,12 @@ class ShannonBaseVectorStore(VectorStore):
     def similarity_search_by_vector(
         self, embedding: List[float], k: int = 4, **kwargs: Any
     ) -> List[Document]:
-        return [doc for doc, _ in self.similarity_search_by_vector_with_score(embedding, k)]
+        return [doc for doc, _ in self.similarity_search_by_vector_with_score(embedding, k, **kwargs)]
 
     def similarity_search_by_vector_with_score(
-        self, embedding: List[float], k: int = 4, **kwargs: Any
+        self, embedding: List[float], k: int = 4, filter: Optional[dict] = None, **kwargs: Any
     ) -> List[Tuple[Document, float]]:
-        rows = self._store.search(embedding, k, self.metric)
+        rows = self._store.search(embedding, k, self.metric, filter=filter)
         # DISTANCE is smaller-is-closer; expose it as a score (1 - distance).
         return [
             (Document(id=r.id, page_content=r.content, metadata=dict(r.metadata)),
@@ -108,6 +109,49 @@ class ShannonBaseVectorStore(VectorStore):
             for i in ids
             if i in found
         ]
+
+    def max_marginal_relevance_search_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        fetch_k: int = 20,
+        lambda_mult: float = 0.5,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        rows = self._store.search(embedding, fetch_k, self.metric, filter=filter, with_vector=True)
+        if not rows:
+            return []
+        picks = _mmr(embedding, [r.embedding for r in rows], k, lambda_mult)
+        return [
+            Document(id=rows[i].id, page_content=rows[i].content, metadata=dict(rows[i].metadata))
+            for i in picks
+        ]
+
+    def max_marginal_relevance_search(
+        self,
+        query: str,
+        k: int = 4,
+        fetch_k: int = 20,
+        lambda_mult: float = 0.5,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        embedding = self._embedding.embed_query(query)
+        return self.max_marginal_relevance_search_by_vector(
+            embedding, k, fetch_k, lambda_mult, filter=filter
+        )
+
+    @staticmethod
+    def _cosine_relevance_score_fn(score: float) -> float:
+        # similarity_search_with_score already returns cosine similarity (1 - distance);
+        # clamp to [0, 1] for the relevance-score API.
+        return max(0.0, min(1.0, score))
+
+    def _select_relevance_score_fn(self):
+        if self.metric == "cosine":
+            return self._cosine_relevance_score_fn
+        return super()._select_relevance_score_fn()
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         if not ids:
@@ -130,3 +174,31 @@ class ShannonBaseVectorStore(VectorStore):
         vs = cls(embedding=embedding, table=table, metric=metric, store=store, **connection_kwargs)
         vs.add_texts(texts, metadatas=metadatas, ids=ids)
         return vs
+
+
+def _cos_sim(a: List[float], b: List[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return 0.0 if na == 0 or nb == 0 else dot / (na * nb)
+
+
+def _mmr(query: List[float], candidates: List[List[float]], k: int, lambda_mult: float) -> List[int]:
+    """Maximal marginal relevance: pick k candidates that are close to the query
+    but not to each other. Returns the chosen candidate indices."""
+    if not candidates:
+        return []
+    k = min(k, len(candidates))
+    to_query = [_cos_sim(query, c) for c in candidates]
+    selected: List[int] = []
+    remaining = list(range(len(candidates)))
+    while remaining and len(selected) < k:
+        best_i, best_score = None, None
+        for i in remaining:
+            redundancy = max((_cos_sim(candidates[i], candidates[j]) for j in selected), default=0.0)
+            score = lambda_mult * to_query[i] - (1.0 - lambda_mult) * redundancy
+            if best_score is None or score > best_score:
+                best_score, best_i = score, i
+        selected.append(best_i)
+        remaining.remove(best_i)
+    return selected
