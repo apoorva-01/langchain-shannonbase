@@ -58,11 +58,18 @@ store.similarity_search("what's the return policy?", k=2)
 
 The table is created on the first write, with an `embedding VECTOR(n)` column sized to your embedding model.
 
-### Scores, raw vectors, retriever
+### Filtering, MMR, scores, retriever
 
 ```python
-# cosine similarity score with each hit
+# restrict a search to matching metadata
+store.similarity_search("policy?", k=2, filter={"topic": "refunds"})
+
+# maximal marginal relevance, for hits that aren't near-duplicates of each other
+store.max_marginal_relevance_search("policy?", k=3, fetch_k=20, lambda_mult=0.5)
+
+# cosine similarity, or a normalized [0,1] relevance score, with each hit
 store.similarity_search_with_score("return policy?", k=2)
+store.similarity_search_with_relevance_scores("return policy?", k=2)
 
 # search with an embedding you already have
 store.similarity_search_by_vector(my_vector, k=2)
@@ -97,8 +104,10 @@ Search returns the nearest rows as LangChain `Document`s, each with a score of `
 | Method | What it does |
 |---|---|
 | `add_texts(texts, metadatas, ids)` | embed and upsert, returns the ids |
-| `similarity_search(query, k)` | top-k `Document`s |
+| `similarity_search(query, k, filter=...)` | top-k `Document`s, optional metadata filter |
 | `similarity_search_with_score(query, k)` | same, with similarity scores |
+| `similarity_search_with_relevance_scores(query, k)` | with normalized [0,1] scores (cosine) |
+| `max_marginal_relevance_search(query, k, fetch_k, lambda_mult)` | diverse results |
 | `similarity_search_by_vector(embedding, k)` | search with a raw vector |
 | `get_by_ids(ids)` | fetch documents by id |
 | `delete(ids)` | remove by id |
@@ -128,10 +137,10 @@ For local development, [ShannonBase](https://github.com/Shannon-Data/ShannonBase
 
 Next on my list:
 
-- Metadata filtering on search (`filter={"topic": "refunds"}`)
-- Maximal marginal relevance search for more diverse results
 - Native async via an async MySQL driver (async already works through LangChain's executor fallback)
+- Relevance scores for the `dot` and `euclidean` metrics (cosine is done)
 - Optional vector indexing where the backend supports it
+- Range and comparison operators in filters (only equality today)
 
 Issues and PRs welcome.
 
