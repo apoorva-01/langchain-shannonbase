@@ -120,11 +120,17 @@ class ShannonBaseVectorStore(VectorStore):
         **kwargs: Any,
     ) -> List[Document]:
         rows = self._store.search(embedding, fetch_k, self.metric, filter=filter, with_vector=True)
-        if not rows:
+        candidates: List[List[float]] = []
+        kept = []
+        for r in rows:
+            if r.embedding is not None:
+                candidates.append(r.embedding)
+                kept.append(r)
+        if not candidates:
             return []
-        picks = _mmr(embedding, [r.embedding for r in rows], k, lambda_mult)
+        picks = _mmr(embedding, candidates, k, lambda_mult)
         return [
-            Document(id=rows[i].id, page_content=rows[i].content, metadata=dict(rows[i].metadata))
+            Document(id=kept[i].id, page_content=kept[i].content, metadata=dict(kept[i].metadata))
             for i in picks
         ]
 
@@ -199,6 +205,7 @@ def _mmr(query: List[float], candidates: List[List[float]], k: int, lambda_mult:
             score = lambda_mult * to_query[i] - (1.0 - lambda_mult) * redundancy
             if best_score is None or score > best_score:
                 best_score, best_i = score, i
+        assert best_i is not None
         selected.append(best_i)
         remaining.remove(best_i)
     return selected
