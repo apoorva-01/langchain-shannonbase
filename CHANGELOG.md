@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+- Connection pooling in the MySQL backend (`pool_size`, defaults to 5), so
+  repeated queries reuse connections instead of reconnecting each call.
+- Ships a `py.typed` marker so downstream users get the type hints; mypy runs in CI.
+- Copy-paste RAG example (`examples/rag.py`) and a latency benchmark (`bench/benchmark.py`).
+- README: honest note on exact search and how it scales.
+
 ## 0.2.0
 - Metadata filtering on search: `similarity_search(query, k, filter={"topic": "x"})`,
   translated to a `metadata->>'$.key'` WHERE clause (values always bound, keys validated).

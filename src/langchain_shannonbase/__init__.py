@@ -1,6 +1,6 @@
 """langchain-shannonbase — a LangChain VectorStore for MySQL 9's VECTOR type."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from ._store import InMemoryStore, MySQLStore
 from .vectorstores import ShannonBaseVectorStore

@@ -58,6 +58,8 @@ store.similarity_search("what's the return policy?", k=2)
 
 The table is created on the first write, with an `embedding VECTOR(n)` column sized to your embedding model.
 
+For a full doc-in to grounded-answer example, see [`examples/rag.py`](examples/rag.py).
+
 ### Filtering, MMR, scores, retriever
 
 ```python
@@ -98,6 +100,14 @@ CREATE TABLE documents (
 ```
 
 Search returns the nearest rows as LangChain `Document`s, each with a score of `1 - distance`. Cosine is the default; pass `metric="dot"` or `metric="euclidean"` if you'd rather.
+
+## Performance and scale
+
+Search is exact: MySQL 9 (and ShannonBase) run a full `DISTANCE` scan and return the true nearest neighbours, so recall is always 100%. The tradeoff is that latency grows with the row count, since there's no approximate (HNSW-style) vector index in MySQL 9 or ShannonBase yet. In practice this is fine for thousands to low millions of vectors; past that you'd want an ANN index, which I'll add if and when the backends support one.
+
+Connections are pooled (`pool_size` defaults to 5, override it in the constructor), so repeated queries reuse connections instead of reconnecting each time.
+
+There's a latency benchmark in [`bench/benchmark.py`](bench/benchmark.py) if you want numbers for your own instance.
 
 ## API
 
