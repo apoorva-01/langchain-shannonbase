@@ -15,4 +15,5 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
+      - run: mypy src/langchain_shannonbase
       - run: pytest -q
