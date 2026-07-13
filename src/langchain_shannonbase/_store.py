@@ -37,14 +37,22 @@ class Store(Protocol):
 class MySQLStore:
     """Real backend. Requires: pip install 'langchain-shannonbase[mysql]'."""
 
-    def __init__(self, table: str, **connection_kwargs):
+    def __init__(self, table: str, pool_size: int = 5, **connection_kwargs):
         import mysql.connector  # noqa: F401  (lazy; validates the extra is installed)
         self.table = table
         self._conn_kwargs = connection_kwargs
+        self._pool_size = pool_size
+        self._pool = None
 
     def _connect(self):
-        import mysql.connector
-        return mysql.connector.connect(**self._conn_kwargs)
+        # Pooled connections are reused across calls; conn.close() returns them to
+        # the pool rather than tearing down a TCP connection each time.
+        from mysql.connector import pooling
+        if self._pool is None:
+            self._pool = pooling.MySQLConnectionPool(
+                pool_name="shannonbase", pool_size=self._pool_size, **self._conn_kwargs
+            )
+        return self._pool.get_connection()
 
     def ensure_table(self, dim: int) -> None:
         conn = self._connect()
