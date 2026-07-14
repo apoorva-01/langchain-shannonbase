@@ -46,7 +46,8 @@ def insert_sql(table: str) -> str:
     )
 
 
-def search_sql(table: str, metric: str = "cosine", filter_keys=(), with_vector: bool = False) -> str:
+def search_sql(table: str, metric: str = "cosine", filter_keys=(),
+               with_vector: bool = False, n_clusters: int = 0) -> str:
     m = _METRICS.get(metric)
     if m is None:
         raise ValueError(f"unknown metric {metric!r}; use one of {list(_METRICS)}")
@@ -56,14 +57,52 @@ def search_sql(table: str, metric: str = "cosine", filter_keys=(), with_vector: 
     cols = "id, content, metadata"
     if with_vector:
         cols += ", VECTOR_TO_STRING(embedding) AS emb"
-    where = ""
-    if filter_keys:
-        where = " WHERE " + " AND ".join(f"metadata->>'$.{key}' = %s" for key in filter_keys)
+    parts = [f"metadata->>'$.{key}' = %s" for key in filter_keys]
+    if n_clusters:
+        parts.append("cluster IN (" + ", ".join(["%s"] * n_clusters) + ")")
+    where = (" WHERE " + " AND ".join(parts)) if parts else ""
     return (
         f"SELECT {cols}, "
         f"DISTANCE(embedding, STRING_TO_VECTOR(%s), '{m}') AS dist "
         f"FROM `{table}`{where} ORDER BY dist ASC LIMIT %s"
     )
+
+
+def all_embeddings_sql(table: str) -> str:
+    return f"SELECT id, VECTOR_TO_STRING(embedding) FROM `{table}`"
+
+
+def create_ivf_table_sql(table: str, dim: int) -> str:
+    return (
+        f"CREATE TABLE IF NOT EXISTS `{table}_ivf` ("
+        "  cid INT PRIMARY KEY,"
+        f"  centroid VECTOR({dim})"
+        ")"
+    )
+
+
+def insert_ivf_sql(table: str) -> str:
+    return f"INSERT INTO `{table}_ivf` (cid, centroid) VALUES (%s, STRING_TO_VECTOR(%s))"
+
+
+def clear_ivf_sql(table: str) -> str:
+    return f"DELETE FROM `{table}_ivf`"
+
+
+def select_centroids_sql(table: str) -> str:
+    return f"SELECT cid, VECTOR_TO_STRING(centroid) FROM `{table}_ivf` ORDER BY cid ASC"
+
+
+def add_cluster_column_sql(table: str) -> str:
+    return f"ALTER TABLE `{table}` ADD COLUMN cluster INT"
+
+
+def add_cluster_index_sql(table: str) -> str:
+    return f"ALTER TABLE `{table}` ADD INDEX idx_cluster (cluster)"
+
+
+def update_cluster_sql(table: str) -> str:
+    return f"UPDATE `{table}` SET cluster = %s WHERE id = %s"
 
 
 def delete_sql(table: str, n_ids: int) -> str:
