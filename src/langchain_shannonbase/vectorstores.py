@@ -6,6 +6,7 @@ which all share the same VECTOR / STRING_TO_VECTOR / DISTANCE surface.
 from __future__ import annotations
 
 import math
+import random
 import uuid
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -13,6 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 
+from . import _ivf
 from ._store import InMemoryStore, MySQLStore, Store
 
 
@@ -46,6 +48,9 @@ class ShannonBaseVectorStore(VectorStore):
         self.metric = metric
         self._store: Store = store if store is not None else MySQLStore(table, **connection_kwargs)
         self._dim: Optional[int] = None
+        self._nprobe = 8
+        self._centroids_loaded = False
+        self._centroids: Optional[List[List[float]]] = None
 
     @property
     def embeddings(self) -> Embeddings:
@@ -93,7 +98,8 @@ class ShannonBaseVectorStore(VectorStore):
     def similarity_search_by_vector_with_score(
         self, embedding: List[float], k: int = 4, filter: Optional[dict] = None, **kwargs: Any
     ) -> List[Tuple[Document, float]]:
-        rows = self._store.search(embedding, k, self.metric, filter=filter)
+        clusters = self._probe(embedding, kwargs.get("nprobe"))
+        rows = self._store.search(embedding, k, self.metric, filter=filter, clusters=clusters)
         # DISTANCE is smaller-is-closer; expose it as a score (1 - distance).
         return [
             (Document(id=r.id, page_content=r.content, metadata=dict(r.metadata)),
@@ -110,6 +116,41 @@ class ShannonBaseVectorStore(VectorStore):
             if i in found
         ]
 
+    def build_index(self, n_lists: int = 100, sample: int = 50000, iters: int = 10,
+                    nprobe: int = 8, seed: int = 0) -> None:
+        """Build an approximate IVF index so searches scan a fraction of the rows.
+
+        Runs k-means over the stored vectors (sampled if there are more than
+        ``sample``), assigns each row to its nearest centroid, and persists both.
+        After this, searches only scan the ``nprobe`` centroids nearest the query.
+        Recall is < 100% and rises with ``nprobe``. Call again to rebuild.
+        """
+        pairs = self._store.all_embeddings()
+        if not pairs:
+            raise ValueError("nothing to index yet; add documents first")
+        vectors = [v for _, v in pairs]
+        if len(vectors) > sample:
+            vectors = random.Random(seed).sample(vectors, sample)
+        n_lists = min(n_lists, len(vectors))
+        centroids = _ivf.kmeans(vectors, n_lists, iters=iters, seed=seed)
+        assignments = {rid: _ivf.nearest(v, centroids) for rid, v in pairs}
+        self._store.write_index(centroids, assignments)
+        self._centroids = centroids
+        self._centroids_loaded = True
+        self._nprobe = nprobe
+
+    def _current_centroids(self) -> Optional[List[List[float]]]:
+        if not self._centroids_loaded:
+            self._centroids = self._store.read_centroids()
+            self._centroids_loaded = True
+        return self._centroids
+
+    def _probe(self, embedding: List[float], nprobe: Optional[int]) -> Optional[List[int]]:
+        centroids = self._current_centroids()
+        if not centroids:
+            return None
+        return _ivf.nearest_n(embedding, centroids, nprobe or self._nprobe)
+
     def max_marginal_relevance_search_by_vector(
         self,
         embedding: List[float],
@@ -119,7 +160,9 @@ class ShannonBaseVectorStore(VectorStore):
         filter: Optional[dict] = None,
         **kwargs: Any,
     ) -> List[Document]:
-        rows = self._store.search(embedding, fetch_k, self.metric, filter=filter, with_vector=True)
+        clusters = self._probe(embedding, kwargs.get("nprobe"))
+        rows = self._store.search(embedding, fetch_k, self.metric, filter=filter,
+                                  with_vector=True, clusters=clusters)
         candidates: List[List[float]] = []
         kept = []
         for r in rows:
