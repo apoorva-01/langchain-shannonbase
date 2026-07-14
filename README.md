@@ -103,7 +103,18 @@ Search returns the nearest rows as LangChain `Document`s, each with a score of `
 
 ## Performance and scale
 
-Search is exact: MySQL 9 (and ShannonBase) run a full `DISTANCE` scan and return the true nearest neighbours, so recall is always 100%. The tradeoff is that latency grows with the row count, since there's no approximate (HNSW-style) vector index in MySQL 9 or ShannonBase yet. In practice this is fine for thousands to low millions of vectors; past that you'd want an ANN index, which I'll add if and when the backends support one.
+By default search is exact: a full `DISTANCE` scan that returns the true nearest neighbours, so recall is 100%. That's fine for thousands to low millions of vectors.
+
+Past that, build an approximate **IVF index** so a search only scans a fraction of the table:
+
+```python
+store.add_texts(my_docs)           # load your data first
+store.build_index(n_lists=1000)    # k-means centroids + an indexed cluster column
+
+store.similarity_search("query", k=5, nprobe=10)   # scans ~ nprobe / n_lists of the rows
+```
+
+It's k-means clustering plus an indexed `cluster` column, the same idea as pgvector's `IVFFlat`, done in application logic because MySQL 9 and ShannonBase don't have a native ANN index yet. Recall is approximate and rises with `nprobe`. On clustered data the trade is steep in your favour: in the offline tests, probing 1 of 8 lists keeps recall@10 at 1.0 while scanning ~12% of rows. Real recall depends on your data, so measure with `bench/benchmark.py` on your own set.
 
 Connections are pooled (`pool_size` defaults to 5, override it in the constructor), so repeated queries reuse connections instead of reconnecting each time.
 
@@ -122,6 +133,7 @@ There's a latency benchmark in [`bench/benchmark.py`](bench/benchmark.py) if you
 | `get_by_ids(ids)` | fetch documents by id |
 | `delete(ids)` | remove by id |
 | `from_texts(texts, embedding, ...)` | build a populated store in one call |
+| `build_index(n_lists, nprobe)` | build an approximate IVF index for large tables |
 
 Metrics: `cosine` (default), `dot`, `euclidean`.
 
@@ -149,7 +161,7 @@ Next on my list:
 
 - Native async via an async MySQL driver (async already works through LangChain's executor fallback)
 - Relevance scores for the `dot` and `euclidean` metrics (cosine is done)
-- Optional vector indexing where the backend supports it
+- A native ANN index if MySQL or ShannonBase ship one (the approximate IVF index works today via `build_index`)
 - Range and comparison operators in filters (only equality today)
 
 Issues and PRs welcome.

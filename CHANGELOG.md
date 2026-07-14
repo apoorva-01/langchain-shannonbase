@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+- Approximate IVF index via `build_index(n_lists, nprobe)`: k-means centroids plus
+  an indexed `cluster` column, so a search scans only the `nprobe` nearest lists
+  instead of the whole table (recall rises with `nprobe`). Exact search stays the
+  default; the index is opt-in.
+- Offline recall tests measure the tradeoff (probing every list matches exact).
+
 ## 0.3.0
 - Connection pooling in the MySQL backend (`pool_size`, defaults to 5), so
   repeated queries reuse connections instead of reconnecting each call.
