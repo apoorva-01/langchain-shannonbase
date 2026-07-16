@@ -1,9 +1,8 @@
 """Storage backends behind the vector store.
 
 MySQLStore talks to a real ShannonBase / MySQL 9 / HeatWave instance. InMemoryStore
-emulates the same behavior in pure Python (cosine over stored vectors) so the
-vector store can be fully unit-tested offline — same pattern that keeps the tests
-deterministic and CI-friendly without provisioning a database.
+emulates the same behavior in pure Python (cosine over stored vectors) so the vector
+store can be fully unit-tested offline, deterministically and without a database.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional, Protocol, Tuple
 
-from . import _sql
+from . import _filter, _sql
 
 
 @dataclass
@@ -35,15 +34,16 @@ class Store(Protocol):
     def delete(self, ids: List[str]) -> None: ...
     def all_embeddings(self) -> List[Tuple[str, List[float]]]: ...
     def write_index(self, centroids: List[List[float]], assignments: dict) -> None: ...
+    def set_clusters(self, assignments: dict) -> None: ...
     def read_centroids(self) -> Optional[List[List[float]]]: ...
 
 
 class MySQLStore:
     """Real backend. Requires: pip install 'langchain-shannonbase[mysql]'."""
 
-    def __init__(self, table: str, pool_size: int = 5, **connection_kwargs):
+    def __init__(self, schema: _sql.Schema, pool_size: int = 5, **connection_kwargs):
         import mysql.connector  # noqa: F401  (lazy; validates the extra is installed)
-        self.table = table
+        self.s = schema
         self._conn_kwargs = connection_kwargs
         self._pool_size = pool_size
         self._pool = None
@@ -61,7 +61,7 @@ class MySQLStore:
     def ensure_table(self, dim: int) -> None:
         conn = self._connect()
         try:
-            conn.cursor().execute(_sql.create_table_sql(self.table, dim))
+            conn.cursor().execute(_sql.create_table_sql(self.s, dim))
             conn.commit()
         finally:
             conn.close()
@@ -70,9 +70,8 @@ class MySQLStore:
         conn = self._connect()
         try:
             cur = conn.cursor()
-            stmt = _sql.insert_sql(self.table)
             cur.executemany(
-                stmt,
+                _sql.insert_sql(self.s),
                 [(rid, content, json.dumps(meta), _sql.vector_literal(emb))
                  for rid, content, meta, emb in rows],
             )
@@ -81,16 +80,15 @@ class MySQLStore:
             conn.close()
 
     def search(self, embedding, k, metric, filter=None, with_vector=False, clusters=None):
-        keys = tuple((filter or {}).keys())
-        vals = [(filter or {})[key] for key in keys]
+        clauses, fparams = _filter.to_sql(filter or {}, self.s.metadata)
         probe = list(clusters) if clusters else []
         conn = self._connect()
         try:
             cur = conn.cursor()
             cur.execute(
-                _sql.search_sql(self.table, metric, filter_keys=keys,
+                _sql.search_sql(self.s, metric, filter_clauses=clauses,
                                 with_vector=with_vector, n_clusters=len(probe)),
-                (_sql.vector_literal(embedding), *vals, *probe, k),
+                (_sql.vector_literal(embedding), *fparams, *probe, k),
             )
             out = []
             for row in cur.fetchall():
@@ -112,7 +110,7 @@ class MySQLStore:
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute(_sql.select_by_ids_sql(self.table, len(ids)), tuple(ids))
+            cur.execute(_sql.select_by_ids_sql(self.s, len(ids)), tuple(ids))
             out = []
             for rid, content, meta in cur.fetchall():
                 md = meta if isinstance(meta, dict) else json.loads(meta or "{}")
@@ -127,7 +125,7 @@ class MySQLStore:
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute(_sql.delete_sql(self.table, len(ids)), tuple(ids))
+            cur.execute(_sql.delete_sql(self.s, len(ids)), tuple(ids))
             conn.commit()
         finally:
             conn.close()
@@ -136,7 +134,7 @@ class MySQLStore:
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute(_sql.all_embeddings_sql(self.table))
+            cur.execute(_sql.all_embeddings_sql(self.s))
             return [(rid, json.loads(emb)) for rid, emb in cur.fetchall()]
         finally:
             conn.close()
@@ -147,21 +145,35 @@ class MySQLStore:
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute(_sql.create_ivf_table_sql(self.table, dim))
-            cur.execute(_sql.clear_ivf_sql(self.table))
-            cur.executemany(_sql.insert_ivf_sql(self.table),
+            cur.execute(_sql.create_ivf_table_sql(self.s, dim))
+            cur.execute(_sql.clear_ivf_sql(self.s))
+            cur.executemany(_sql.insert_ivf_sql(self.s),
                             [(i, _sql.vector_literal(c)) for i, c in enumerate(centroids)])
             # MySQL has no ADD COLUMN IF NOT EXISTS; a duplicate on rebuild is expected.
-            for ddl in (_sql.add_cluster_column_sql(self.table), _sql.add_cluster_index_sql(self.table)):
+            for ddl in (_sql.add_cluster_column_sql(self.s), _sql.add_cluster_index_sql(self.s)):
                 try:
                     cur.execute(ddl)
                 except mysql.connector.Error:
                     pass
-            cur.executemany(_sql.update_cluster_sql(self.table),
-                            [(cid, rid) for rid, cid in assignments.items()])
+            self._update_clusters(cur, assignments)
             conn.commit()
         finally:
             conn.close()
+
+    def set_clusters(self, assignments):
+        if not assignments:
+            return
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            self._update_clusters(cur, assignments)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _update_clusters(self, cur, assignments):
+        cur.executemany(_sql.update_cluster_sql(self.s),
+                        [(cid, rid) for rid, cid in assignments.items()])
 
     def read_centroids(self):
         import mysql.connector
@@ -169,7 +181,7 @@ class MySQLStore:
         try:
             cur = conn.cursor()
             try:
-                cur.execute(_sql.select_centroids_sql(self.table))
+                cur.execute(_sql.select_centroids_sql(self.s))
             except mysql.connector.Error:
                 return None  # index has not been built yet
             rows = cur.fetchall()
@@ -199,7 +211,7 @@ class InMemoryStore:
         for rid, (content, meta, emb) in self._rows.items():
             if probe is not None and self._cluster.get(rid) not in probe:
                 continue
-            if filter and any(meta.get(key) != val for key, val in filter.items()):
+            if filter and not _filter.matches(filter, meta):
                 continue
             scored.append(Row(rid, content, meta, _cosine_distance(embedding, emb),
                               list(emb) if with_vector else None))
@@ -212,6 +224,9 @@ class InMemoryStore:
     def write_index(self, centroids, assignments):
         self._centroids = [list(c) for c in centroids]
         self._cluster = dict(assignments)
+
+    def set_clusters(self, assignments):
+        self._cluster.update(assignments)
 
     def read_centroids(self):
         return self._centroids
