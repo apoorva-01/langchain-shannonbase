@@ -14,7 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 
-from . import _ivf
+from . import _ivf, _sql
 from ._store import InMemoryStore, MySQLStore, Store
 
 
@@ -41,12 +41,23 @@ class ShannonBaseVectorStore(VectorStore):
         table: str = "langchain_vectors",
         metric: str = "cosine",
         store: Optional[Store] = None,
+        id_column: str = "id",
+        content_column: str = "content",
+        metadata_column: str = "metadata",
+        embedding_column: str = "embedding",
+        cluster_column: str = "cluster",
+        create_table: bool = True,
         **connection_kwargs: Any,
     ):
         self._embedding = embedding
         self.table = table
         self.metric = metric
-        self._store: Store = store if store is not None else MySQLStore(table, **connection_kwargs)
+        self._create_table = create_table
+        schema = _sql.Schema(
+            table=table, id=id_column, content=content_column, metadata=metadata_column,
+            embedding=embedding_column, cluster=cluster_column,
+        )
+        self._store: Store = store if store is not None else MySQLStore(schema, **connection_kwargs)
         self._dim: Optional[int] = None
         self._nprobe = 8
         self._centroids_loaded = False
@@ -59,7 +70,8 @@ class ShannonBaseVectorStore(VectorStore):
     def _ensure_dim(self, dim: int) -> None:
         if self._dim is None:
             self._dim = dim
-            self._store.ensure_table(dim)
+            if self._create_table:
+                self._store.ensure_table(dim)
 
     def add_texts(
         self,
@@ -79,6 +91,13 @@ class ShannonBaseVectorStore(VectorStore):
             (ids[i], texts[i], metadatas[i], vectors[i]) for i in range(len(texts))
         ]
         self._store.upsert(rows)
+        # Keep the IVF index current: assign new rows to their nearest centroid so
+        # an indexed search finds them without a full rebuild.
+        centroids = self._current_centroids()
+        if centroids:
+            self._store.set_clusters(
+                {ids[i]: _ivf.nearest(vectors[i], centroids) for i in range(len(texts))}
+            )
         return ids
 
     def similarity_search(self, query: str, k: int = 4, **kwargs: Any) -> List[Document]:
