@@ -63,8 +63,10 @@ For a full doc-in to grounded-answer example, see [`examples/rag.py`](examples/r
 ### Filtering, MMR, scores, retriever
 
 ```python
-# restrict a search to matching metadata
+# filter by metadata: equality, membership ($in/$nin), or comparison ($gt/$gte/$lt/$lte/$ne)
 store.similarity_search("policy?", k=2, filter={"topic": "refunds"})
+store.similarity_search("policy?", k=2, filter={"topic": {"$in": ["refunds", "returns"]}})
+store.similarity_search("policy?", k=2, filter={"views": {"$gte": 100}})
 
 # maximal marginal relevance, for hits that aren't near-duplicates of each other
 store.max_marginal_relevance_search("policy?", k=3, fetch_k=20, lambda_mult=0.5)
@@ -116,6 +118,8 @@ store.similarity_search("query", k=5, nprobe=10)   # scans ~ nprobe / n_lists of
 
 It's k-means clustering plus an indexed `cluster` column, the same idea as pgvector's `IVFFlat`, done in application logic because MySQL 9 and ShannonBase don't have a native ANN index yet. Recall is approximate and rises with `nprobe`. On clustered data the trade is steep in your favour: in the offline tests, probing 1 of 8 lists keeps recall@10 at 1.0 while scanning ~12% of rows. Real recall depends on your data, so measure with `bench/benchmark.py` on your own set.
 
+Rows added after `build_index` are assigned to their nearest centroid automatically, so the index stays correct as you keep writing. Rebuild periodically (call `build_index` again) to re-centre the clusters as the data grows.
+
 Connections are pooled (`pool_size` defaults to 5, override it in the constructor), so repeated queries reuse connections instead of reconnecting each time.
 
 There's a latency benchmark in [`bench/benchmark.py`](bench/benchmark.py) if you want numbers for your own instance.
@@ -136,6 +140,25 @@ There's a latency benchmark in [`bench/benchmark.py`](bench/benchmark.py) if you
 | `build_index(n_lists, nprobe)` | build an approximate IVF index for large tables |
 
 Metrics: `cosine` (default), `dot`, `euclidean`.
+
+## Custom schema
+
+By default the store creates and owns its table. To point it at an existing table, or to use your own column names, pass them in and turn off table creation:
+
+```python
+store = ShannonBaseVectorStore(
+    embedding=embeddings,
+    table="my_docs",
+    id_column="doc_id",
+    content_column="body",
+    metadata_column="meta",
+    embedding_column="vec",
+    create_table=False,          # don't CREATE TABLE; use what's already there
+    host="127.0.0.1", user="root", password="", database="app",
+)
+```
+
+Column and table names are validated as SQL identifiers.
 
 ## Testing
 
@@ -159,10 +182,10 @@ For local development, [ShannonBase](https://github.com/Shannon-Data/ShannonBase
 
 Next on my list:
 
+- Hybrid search: vector plus MySQL `FULLTEXT` keyword matching
 - Native async via an async MySQL driver (async already works through LangChain's executor fallback)
 - Relevance scores for the `dot` and `euclidean` metrics (cosine is done)
 - A native ANN index if MySQL or ShannonBase ship one (the approximate IVF index works today via `build_index`)
-- Range and comparison operators in filters (only equality today)
 
 Issues and PRs welcome.
 

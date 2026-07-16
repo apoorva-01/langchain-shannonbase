@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+- Metadata filter operators: `$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`,
+  `$lte` (a bare `{"key": value}` is still equality).
+- Custom schema: `id_column` / `content_column` / `metadata_column` /
+  `embedding_column` and `create_table=False` to use an existing table.
+- IVF index stays current on insert: rows added after `build_index` are assigned
+  to their nearest centroid, so indexed search finds them without a rebuild.
+
 ## 0.4.0
 - Approximate IVF index via `build_index(n_lists, nprobe)`: k-means centroids plus
   an indexed `cluster` column, so a search scans only the `nprobe` nearest lists
