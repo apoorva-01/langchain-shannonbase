@@ -75,3 +75,16 @@ def test_build_index_on_empty_raises():
     vs = ShannonBaseVectorStore(embedding=LookupEmbeddings(), store=InMemoryStore())
     with pytest.raises(ValueError):
         vs.build_index()
+
+
+def test_docs_added_after_build_are_still_found():
+    # A row inserted after build_index must be assigned to a centroid, so a small
+    # nprobe search still finds it (without this, it would be invisible until rebuild).
+    vs = _fresh()
+    vs.build_index(n_lists=C, nprobe=1, iters=15, seed=0)
+    at_cluster0 = centers[0]
+    _lookup["nd"] = at_cluster0
+    _lookup["nq"] = at_cluster0
+    vs.add_texts(["nd"], ids=["nd"])
+    found = {d.id for d in vs.similarity_search("nq", k=300, nprobe=1)}
+    assert "nd" in found

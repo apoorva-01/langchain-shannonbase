@@ -7,6 +7,7 @@ so disjoint vocabularies give orthogonal (dissimilar) vectors on demand.
 import hashlib
 import re
 
+import pytest
 from langchain_core.embeddings import Embeddings
 
 from langchain_shannonbase import InMemoryStore, ShannonBaseVectorStore
@@ -70,3 +71,37 @@ def test_relevance_scores_are_normalized():
     scored = vs.similarity_search_with_relevance_scores("red apple", k=2)
     assert len(scored) == 2
     assert all(0.0 <= score <= 1.0 for _, score in scored)
+
+
+def test_filter_in_operator():
+    vs = _store()
+    vs.add_texts(["a", "b", "c"], metadatas=[{"t": "x"}, {"t": "y"}, {"t": "z"}], ids=["1", "2", "3"])
+    hits = vs.similarity_search("q", k=5, filter={"t": {"$in": ["x", "z"]}})
+    assert {d.id for d in hits} == {"1", "3"}
+
+
+def test_filter_ne_operator():
+    vs = _store()
+    vs.add_texts(["a", "b"], metadatas=[{"t": "x"}, {"t": "y"}], ids=["1", "2"])
+    hits = vs.similarity_search("q", k=5, filter={"t": {"$ne": "x"}})
+    assert {d.id for d in hits} == {"2"}
+
+
+def test_filter_numeric_range():
+    vs = _store()
+    vs.add_texts(["a", "b", "c"], metadatas=[{"v": 10}, {"v": 50}, {"v": 100}], ids=["1", "2", "3"])
+    hits = vs.similarity_search("q", k=5, filter={"v": {"$gt": 10, "$lte": 50}})
+    assert {d.id for d in hits} == {"2"}
+
+
+def test_unknown_operator_raises():
+    vs = _store()
+    vs.add_texts(["a"], metadatas=[{"t": "x"}], ids=["1"])
+    with pytest.raises(ValueError):
+        vs.similarity_search("q", k=5, filter={"t": {"$like": "x"}})
+
+
+def test_custom_columns_accepted():
+    # Column names flow into the Schema without error, even with the in-memory store.
+    ShannonBaseVectorStore(embedding=HashEmbeddings(), store=InMemoryStore(),
+                           id_column="doc_id", content_column="body", create_table=False)
