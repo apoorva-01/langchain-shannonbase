@@ -57,7 +57,10 @@ class ShannonBaseVectorStore(VectorStore):
             table=table, id=id_column, content=content_column, metadata=metadata_column,
             embedding=embedding_column, cluster=cluster_column,
         )
+        self._schema = schema
+        self._connection_kwargs = connection_kwargs
         self._store: Store = store if store is not None else MySQLStore(schema, **connection_kwargs)
+        self._astore: Any = None
         self._dim: Optional[int] = None
         self._nprobe = 8
         self._centroids_loaded = False
@@ -155,21 +158,7 @@ class ShannonBaseVectorStore(VectorStore):
         clusters = self._probe(vector, kwargs.get("nprobe"))
         v_rows = self._store.search(vector, fetch_k, self.metric, filter=filter, clusters=clusters)
         k_rows = self._store.keyword_search(query, fetch_k, filter=filter)
-
-        scores: dict = {}
-        rows: dict = {}
-        for rank, r in enumerate(v_rows):
-            scores[r.id] = scores.get(r.id, 0.0) + vector_weight / (rrf_k + rank + 1)
-            rows[r.id] = r
-        for rank, r in enumerate(k_rows):
-            scores[r.id] = scores.get(r.id, 0.0) + (1.0 - vector_weight) / (rrf_k + rank + 1)
-            rows.setdefault(r.id, r)
-
-        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
-        return [
-            (Document(id=i, page_content=rows[i].content, metadata=dict(rows[i].metadata)), s)
-            for i, s in ranked
-        ]
+        return _rrf_fuse(v_rows, k_rows, vector_weight, rrf_k, k)
 
     def ensure_fulltext_index(self) -> None:
         """Add the FULLTEXT index hybrid_search needs to an existing table.
@@ -178,6 +167,100 @@ class ShannonBaseVectorStore(VectorStore):
         table created by an earlier version, or when pointing at your own table.
         """
         self._store.ensure_fulltext_index()
+
+    # --- Native async -----------------------------------------------------------
+    # These delegate to a store that does non-blocking I/O (aiomysql), instead of
+    # LangChain's default of running the sync methods in a thread pool. When no
+    # async-capable store is available they fall back to that default via super().
+
+    def _async_store(self):
+        if hasattr(self._store, "asearch"):
+            return self._store  # InMemoryStore and AsyncMySQLStore both qualify
+        if self._astore is None and self._connection_kwargs:
+            from ._async_store import AsyncMySQLStore
+            self._astore = AsyncMySQLStore(self._schema, **self._connection_kwargs)
+        return self._astore
+
+    async def aadd_texts(
+        self, texts: Iterable[str], metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None, **kwargs: Any,
+    ) -> List[str]:
+        store = self._async_store()
+        if store is None:
+            return await super().aadd_texts(texts, metadatas, ids=ids, **kwargs)
+        texts = list(texts)
+        if not texts:
+            return []
+        vectors = await self._embedding.aembed_documents(texts)
+        dim = len(vectors[0])
+        if self._dim is None:
+            self._dim = dim
+            if self._create_table:
+                await store.aensure_table(dim)
+        metadatas = metadatas or [{} for _ in texts]
+        ids = ids or [str(uuid.uuid4()) for _ in texts]
+        rows = [(ids[i], texts[i], metadatas[i], vectors[i]) for i in range(len(texts))]
+        await store.aupsert(rows)
+        # Only maintain the index if centroids are already in memory; don't trigger
+        # blocking I/O to read them from the async path.
+        if self._centroids_loaded and self._centroids:
+            await store.aset_clusters(
+                {ids[i]: _ivf.nearest(vectors[i], self._centroids) for i in range(len(texts))}
+            )
+        return ids
+
+    async def asimilarity_search(self, query: str, k: int = 4, **kwargs: Any) -> List[Document]:
+        return [doc for doc, _ in await self.asimilarity_search_with_score(query, k, **kwargs)]
+
+    async def asimilarity_search_with_score(
+        self, query: str, k: int = 4, filter: Optional[dict] = None, **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        store = self._async_store()
+        if store is None:
+            return await super().asimilarity_search_with_score(query, k, filter=filter, **kwargs)
+        vector = await self._embedding.aembed_query(query)
+        clusters = self._probe(vector, kwargs.get("nprobe"))
+        rows = await store.asearch(vector, k, self.metric, filter=filter, clusters=clusters)
+        return [
+            (Document(id=r.id, page_content=r.content, metadata=dict(r.metadata)), 1.0 - r.distance)
+            for r in rows
+        ]
+
+    async def ahybrid_search(
+        self, query: str, k: int = 4, fetch_k: int = 20, filter: Optional[dict] = None,
+        vector_weight: float = 0.5, rrf_k: int = 60, **kwargs: Any,
+    ) -> List[Document]:
+        store = self._async_store()
+        if store is None:
+            return self.hybrid_search(query, k, fetch_k, filter=filter,
+                                      vector_weight=vector_weight, **kwargs)
+        if not 0.0 <= vector_weight <= 1.0:
+            raise ValueError("vector_weight must be between 0 and 1")
+        vector = await self._embedding.aembed_query(query)
+        clusters = self._probe(vector, kwargs.get("nprobe"))
+        v_rows = await store.asearch(vector, fetch_k, self.metric, filter=filter, clusters=clusters)
+        k_rows = await store.akeyword_search(query, fetch_k, filter=filter)
+        return [doc for doc, _ in _rrf_fuse(v_rows, k_rows, vector_weight, rrf_k, k)]
+
+    async def aget_by_ids(self, ids: Iterable[str]) -> List[Document]:
+        ids = list(ids)
+        store = self._async_store()
+        if store is None:
+            return await super().aget_by_ids(ids)
+        found = {r.id: r for r in await store.aget(ids)}
+        return [
+            Document(id=i, page_content=found[i].content, metadata=dict(found[i].metadata))
+            for i in ids if i in found
+        ]
+
+    async def adelete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
+        store = self._async_store()
+        if store is None:
+            return await super().adelete(ids, **kwargs)
+        if not ids:
+            return False
+        await store.adelete(ids)
+        return True
 
     def get_by_ids(self, ids: Iterable[str]) -> List[Document]:
         ids = list(ids)
@@ -276,13 +359,22 @@ class ShannonBaseVectorStore(VectorStore):
         distance = 1.0 - score
         return 1.0 / (1.0 + max(0.0, distance))
 
+    @staticmethod
+    def _dot_relevance_score_fn(score: float) -> float:
+        # ShannonBase's DISTANCE(...,'DOT') is the negated inner product, so the
+        # wrapper's score = 1 - (-dot) = 1 + dot, i.e. dot = score - 1. On normalized
+        # embeddings dot is the cosine similarity in [-1, 1], so this matches the
+        # cosine score exactly; for non-unit vectors the inner product is unbounded
+        # and we clamp.
+        return max(0.0, min(1.0, score - 1.0))
+
     def _select_relevance_score_fn(self):
         if self.metric == "cosine":
             return self._cosine_relevance_score_fn
         if self.metric == "euclidean":
             return self._euclidean_relevance_score_fn
-        # dot: DISTANCE(...,'DOT') isn't a bounded distance and the docs don't pin
-        # down its sign, so there's no honest [0, 1] mapping yet. super() raises.
+        if self.metric == "dot":
+            return self._dot_relevance_score_fn
         return super()._select_relevance_score_fn()
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
@@ -306,6 +398,23 @@ class ShannonBaseVectorStore(VectorStore):
         vs = cls(embedding=embedding, table=table, metric=metric, store=store, **connection_kwargs)
         vs.add_texts(texts, metadatas=metadatas, ids=ids)
         return vs
+
+
+def _rrf_fuse(v_rows, k_rows, vector_weight: float, rrf_k: int, k: int) -> List[Tuple[Document, float]]:
+    """Reciprocal rank fusion over the vector and keyword result lists."""
+    scores: dict = {}
+    rows: dict = {}
+    for rank, r in enumerate(v_rows):
+        scores[r.id] = scores.get(r.id, 0.0) + vector_weight / (rrf_k + rank + 1)
+        rows[r.id] = r
+    for rank, r in enumerate(k_rows):
+        scores[r.id] = scores.get(r.id, 0.0) + (1.0 - vector_weight) / (rrf_k + rank + 1)
+        rows.setdefault(r.id, r)
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
+    return [
+        (Document(id=i, page_content=rows[i].content, metadata=dict(rows[i].metadata)), s)
+        for i, s in ranked
+    ]
 
 
 def _cos_sim(a: List[float], b: List[float]) -> float:
