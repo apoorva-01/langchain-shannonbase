@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
-from typing import List, Optional, Protocol, Tuple
+from typing import List, Optional, Protocol, Set, Tuple
 
 from . import _filter, _sql
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(text: str) -> Set[str]:
+    return set(_WORD.findall(text.lower()))
 
 
 @dataclass
@@ -30,6 +37,9 @@ class Store(Protocol):
     def search(self, embedding: List[float], k: int, metric: str,
                filter: Optional[dict] = None, with_vector: bool = False,
                clusters: Optional[List[int]] = None) -> List[Row]: ...
+    def keyword_search(self, text: str, k: int,
+                       filter: Optional[dict] = None) -> List[Row]: ...
+    def ensure_fulltext_index(self) -> None: ...
     def get(self, ids: List[str]) -> List[Row]: ...
     def delete(self, ids: List[str]) -> None: ...
     def all_embeddings(self) -> List[Tuple[str, List[float]]]: ...
@@ -63,6 +73,20 @@ class MySQLStore:
         try:
             conn.cursor().execute(_sql.create_table_sql(self.s, dim))
             conn.commit()
+        finally:
+            conn.close()
+
+    def ensure_fulltext_index(self) -> None:
+        # Idempotent: an existing FULLTEXT index makes ALTER error; swallow it.
+        import mysql.connector
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(_sql.add_fulltext_index_sql(self.s))
+                conn.commit()
+            except mysql.connector.Error:
+                pass
         finally:
             conn.close()
 
@@ -100,6 +124,25 @@ class MySQLStore:
                     vec = None
                 md = meta if isinstance(meta, dict) else json.loads(meta or "{}")
                 out.append(Row(rid, content, md, float(dist), vec))
+            return out
+        finally:
+            conn.close()
+
+    def keyword_search(self, text, k, filter=None):
+        clauses, fparams = _filter.to_sql(filter or {}, self.s.metadata)
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                _sql.keyword_search_sql(self.s, filter_clauses=clauses),
+                (text, *fparams, text, k),
+            )
+            out = []
+            for rid, content, meta, score in cur.fetchall():
+                md = meta if isinstance(meta, dict) else json.loads(meta or "{}")
+                # score is a relevance value (larger is better); store its negative
+                # so the Row's distance stays smaller-is-closer like everywhere else.
+                out.append(Row(rid, content, md, -float(score)))
             return out
         finally:
             conn.close()
@@ -201,6 +244,9 @@ class InMemoryStore:
     def ensure_table(self, dim: int) -> None:
         pass
 
+    def ensure_fulltext_index(self) -> None:
+        pass
+
     def upsert(self, rows):
         for rid, content, meta, emb in rows:
             self._rows[rid] = (content, dict(meta or {}), list(emb))
@@ -216,6 +262,22 @@ class InMemoryStore:
             scored.append(Row(rid, content, meta, _cosine_distance(embedding, emb),
                               list(emb) if with_vector else None))
         scored.sort(key=lambda r: r.distance)
+        return scored[:k]
+
+    def keyword_search(self, text, k, filter=None):
+        # Simple term-overlap scorer: enough to fuse deterministically offline.
+        # MySQL uses a real FULLTEXT index; the fusion logic is what's under test.
+        q = _tokens(text)
+        if not q:
+            return []
+        scored = []
+        for rid, (content, meta, emb) in self._rows.items():
+            if filter and not _filter.matches(filter, meta):
+                continue
+            overlap = sum(1 for t in q if t in _tokens(content))
+            if overlap:
+                scored.append(Row(rid, content, meta, -float(overlap)))
+        scored.sort(key=lambda r: r.distance)  # -overlap ascending == overlap desc
         return scored[:k]
 
     def all_embeddings(self):
