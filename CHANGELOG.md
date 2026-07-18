@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+- Delete by metadata filter: `delete(filter={"source": "old"})` (and the async
+  `adelete`) removes every matching row, using the same filter operators as search.
+  An empty filter is a no-op, never a full-table wipe.
+
 ## 0.7.0
 - Native async via aiomysql: `aadd_texts`, `asimilarity_search[_with_score]`,
   `aget_by_ids`, `adelete`, and `ahybrid_search` use non-blocking I/O instead of

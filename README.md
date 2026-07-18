@@ -81,9 +81,10 @@ store.similarity_search_with_relevance_scores("return policy?", k=2)
 # search with an embedding you already have
 store.similarity_search_by_vector(my_vector, k=2)
 
-# fetch or delete specific rows by id
+# fetch or delete specific rows by id, or delete everything matching a filter
 store.get_by_ids(["1"])
 store.delete(ids=["2"])
+store.delete(filter={"topic": "shipping"})
 
 # use it as a retriever in any chain
 retriever = store.as_retriever(search_kwargs={"k": 3})
