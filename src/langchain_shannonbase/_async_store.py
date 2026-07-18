@@ -115,6 +115,12 @@ class AsyncMySQLStore:
             return
         await self._run(_sql.delete_sql(self.s, len(ids)), tuple(ids))
 
+    async def adelete_where(self, filter) -> None:
+        clauses, params = _filter.to_sql(filter or {}, self.s.metadata)
+        if not clauses:
+            return
+        await self._run(_sql.delete_where_sql(self.s, clauses), tuple(params))
+
     async def aset_clusters(self, assignments) -> None:
         if not assignments:
             return

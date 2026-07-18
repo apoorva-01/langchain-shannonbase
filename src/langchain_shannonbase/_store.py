@@ -42,6 +42,7 @@ class Store(Protocol):
     def ensure_fulltext_index(self) -> None: ...
     def get(self, ids: List[str]) -> List[Row]: ...
     def delete(self, ids: List[str]) -> None: ...
+    def delete_where(self, filter: dict) -> None: ...
     def all_embeddings(self) -> List[Tuple[str, List[float]]]: ...
     def write_index(self, centroids: List[List[float]], assignments: dict) -> None: ...
     def set_clusters(self, assignments: dict) -> None: ...
@@ -169,6 +170,18 @@ class MySQLStore:
         try:
             cur = conn.cursor()
             cur.execute(_sql.delete_sql(self.s, len(ids)), tuple(ids))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_where(self, filter):
+        clauses, params = _filter.to_sql(filter or {}, self.s.metadata)
+        if not clauses:
+            return  # refuse to turn an empty filter into "delete everything"
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(_sql.delete_where_sql(self.s, clauses), tuple(params))
             conn.commit()
         finally:
             conn.close()
@@ -307,6 +320,13 @@ class InMemoryStore:
             self._rows.pop(i, None)
             self._cluster.pop(i, None)
 
+    def delete_where(self, filter):
+        if not filter:
+            return
+        matching = [rid for rid, (_, meta, _) in self._rows.items()
+                    if _filter.matches(filter, meta)]
+        self.delete(matching)
+
     # Async mirror. The in-memory store has no real I/O, so these just wrap the sync
     # methods; their point is to exercise the vector store's native-async delegation
     # path offline (the aiomysql store implements the same surface for real).
@@ -331,6 +351,9 @@ class InMemoryStore:
 
     async def adelete(self, ids):
         self.delete(ids)
+
+    async def adelete_where(self, filter):
+        self.delete_where(filter)
 
     async def aset_clusters(self, assignments):
         self.set_clusters(assignments)

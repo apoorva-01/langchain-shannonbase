@@ -111,6 +111,11 @@ def delete_sql(s: Schema, n_ids: int) -> str:
     return f"DELETE FROM `{s.table}` WHERE `{s.id}` IN ({placeholders})"
 
 
+def delete_where_sql(s: Schema, filter_clauses) -> str:
+    where = " AND ".join(filter_clauses)
+    return f"DELETE FROM `{s.table}` WHERE {where}"
+
+
 def select_by_ids_sql(s: Schema, n_ids: int) -> str:
     placeholders = ", ".join(["%s"] * n_ids)
     return f"SELECT `{s.id}`, `{s.content}`, `{s.metadata}` FROM `{s.table}` WHERE `{s.id}` IN ({placeholders})"
