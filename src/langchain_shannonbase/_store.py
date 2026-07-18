@@ -259,7 +259,7 @@ class InMemoryStore:
                 continue
             if filter and not _filter.matches(filter, meta):
                 continue
-            scored.append(Row(rid, content, meta, _cosine_distance(embedding, emb),
+            scored.append(Row(rid, content, meta, _distance(metric, embedding, emb),
                               list(emb) if with_vector else None))
         scored.sort(key=lambda r: r.distance)
         return scored[:k]
@@ -307,6 +307,34 @@ class InMemoryStore:
             self._rows.pop(i, None)
             self._cluster.pop(i, None)
 
+    # Async mirror. The in-memory store has no real I/O, so these just wrap the sync
+    # methods; their point is to exercise the vector store's native-async delegation
+    # path offline (the aiomysql store implements the same surface for real).
+    async def aensure_table(self, dim):
+        pass
+
+    async def aensure_fulltext_index(self):
+        pass
+
+    async def aupsert(self, rows):
+        self.upsert(rows)
+
+    async def asearch(self, embedding, k, metric, filter=None, with_vector=False, clusters=None):
+        return self.search(embedding, k, metric, filter=filter,
+                           with_vector=with_vector, clusters=clusters)
+
+    async def akeyword_search(self, text, k, filter=None):
+        return self.keyword_search(text, k, filter=filter)
+
+    async def aget(self, ids):
+        return self.get(ids)
+
+    async def adelete(self, ids):
+        self.delete(ids)
+
+    async def aset_clusters(self, assignments):
+        self.set_clusters(assignments)
+
 
 def _cosine_distance(a: List[float], b: List[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -315,3 +343,16 @@ def _cosine_distance(a: List[float], b: List[float]) -> float:
     if na == 0 or nb == 0:
         return 1.0
     return 1.0 - dot / (na * nb)
+
+
+def _distance(metric: str, a: List[float], b: List[float]) -> float:
+    # Mirrors ShannonBase's DISTANCE(): cosine = 1 - cos_sim, dot = -inner_product
+    # (negated so smaller is closer), euclidean = L2. Keeps offline results faithful
+    # to the real backend for every metric, not just cosine.
+    if metric == "cosine":
+        return _cosine_distance(a, b)
+    if metric == "dot":
+        return -sum(x * y for x, y in zip(a, b))
+    if metric == "euclidean":
+        return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+    raise ValueError(f"unknown metric {metric!r}")
