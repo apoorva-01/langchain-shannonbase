@@ -253,10 +253,14 @@ class ShannonBaseVectorStore(VectorStore):
             for i in ids if i in found
         ]
 
-    async def adelete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
+    async def adelete(self, ids: Optional[List[str]] = None,
+                      filter: Optional[dict] = None, **kwargs: Any) -> Optional[bool]:
         store = self._async_store()
         if store is None:
             return await super().adelete(ids, **kwargs)
+        if filter:
+            await store.adelete_where(filter)
+            return True
         if not ids:
             return False
         await store.adelete(ids)
@@ -377,7 +381,11 @@ class ShannonBaseVectorStore(VectorStore):
             return self._dot_relevance_score_fn
         return super()._select_relevance_score_fn()
 
-    def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
+    def delete(self, ids: Optional[List[str]] = None,
+               filter: Optional[dict] = None, **kwargs: Any) -> Optional[bool]:
+        if filter:
+            self._store.delete_where(filter)
+            return True
         if not ids:
             return False
         self._store.delete(ids)
