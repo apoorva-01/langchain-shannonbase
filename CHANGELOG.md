@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+- Hybrid search: `hybrid_search(query, k, vector_weight=...)` blends vector
+  similarity with MySQL `FULLTEXT` keyword matching using reciprocal rank fusion,
+  so a query that's strong on keywords but weak on embeddings (or vice versa) still
+  surfaces the right rows. `vector_weight` (0..1) tilts the blend.
+- New tables get a `FULLTEXT` index on the content column automatically. For a
+  table created by an earlier version, call `ensure_fulltext_index()` once.
+- Relevance scores for the `euclidean` metric, bounded to (0, 1]
+  (`similarity_search_with_relevance_scores`). `dot` still has no honest [0, 1]
+  mapping (its `DISTANCE` semantics aren't documented) and is left unsupported.
+
 ## 0.5.0
 - Metadata filter operators: `$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`,
   `$lte` (a bare `{"key": value}` is still equality).

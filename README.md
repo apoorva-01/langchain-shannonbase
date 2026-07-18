@@ -68,6 +68,9 @@ store.similarity_search("policy?", k=2, filter={"topic": "refunds"})
 store.similarity_search("policy?", k=2, filter={"topic": {"$in": ["refunds", "returns"]}})
 store.similarity_search("policy?", k=2, filter={"views": {"$gte": 100}})
 
+# hybrid: blend vector similarity with keyword (FULLTEXT) matching
+store.hybrid_search("O'Brien refund policy", k=3, vector_weight=0.5)
+
 # maximal marginal relevance, for hits that aren't near-duplicates of each other
 store.max_marginal_relevance_search("policy?", k=3, fetch_k=20, lambda_mult=0.5)
 
@@ -86,6 +89,37 @@ store.delete(ids=["2"])
 retriever = store.as_retriever(search_kwargs={"k": 3})
 ```
 
+## Hybrid search
+
+Vector search is great at meaning and bad at exact tokens: a product SKU, an error
+code, a surname like `O'Brien`. Keyword search is the opposite. `hybrid_search`
+runs both and fuses the two rankings, so you get semantic recall without losing the
+literal matches.
+
+```python
+store.hybrid_search("error E4021 on checkout", k=5, vector_weight=0.5)
+```
+
+It uses [reciprocal rank fusion](https://plg.uwaterloo.ca/~gvcormack/cormacksigir09-rrf.pdf):
+each retriever returns its top `fetch_k`, and a document's score is the weighted sum
+of `1 / (rank + k)` across the two lists. Fusing on *rank* means the two very
+different score scales (cosine distance vs. a FULLTEXT relevance score) never have
+to be reconciled. `vector_weight` runs 0 (pure keyword) to 1 (pure vector); 0.5 is
+a sensible start.
+
+The keyword half needs a MySQL `FULLTEXT` index on the content column. Tables
+created by this package (0.6.0+) get one automatically. For a table created by an
+earlier version, or your own table, add it once:
+
+```python
+store.ensure_fulltext_index()
+```
+
+Two InnoDB FULLTEXT quirks worth knowing, because they're easy to mistake for bugs:
+the default minimum token length is 3 (`innodb_ft_min_token_size`), so one- and
+two-character terms are ignored, and common words on the stopword list don't match.
+Both are server settings, not something this package controls.
+
 ## How it works
 
 No extensions, just MySQL 9's built-in vector support:
@@ -101,7 +135,7 @@ CREATE TABLE documents (
 -- search:  ORDER BY DISTANCE(embedding, STRING_TO_VECTOR('[...]'), 'COSINE') LIMIT k
 ```
 
-Search returns the nearest rows as LangChain `Document`s, each with a score of `1 - distance`. Cosine is the default; pass `metric="dot"` or `metric="euclidean"` if you'd rather.
+Search returns the nearest rows as LangChain `Document`s, each with a score of `1 - distance`. Cosine is the default; pass `metric="dot"` or `metric="euclidean"` if you'd rather. `similarity_search_with_relevance_scores` normalizes to [0, 1] for `cosine` and `euclidean`; `dot` isn't normalized (its `DISTANCE` semantics aren't documented, so there's no honest mapping yet).
 
 ## Performance and scale
 
@@ -129,6 +163,7 @@ There's a latency benchmark in [`bench/benchmark.py`](bench/benchmark.py) if you
 | Method | What it does |
 |---|---|
 | `add_texts(texts, metadatas, ids)` | embed and upsert, returns the ids |
+| `hybrid_search(query, k, vector_weight=...)` | vector + FULLTEXT keyword, fused by rank |
 | `similarity_search(query, k, filter=...)` | top-k `Document`s, optional metadata filter |
 | `similarity_search_with_score(query, k)` | same, with similarity scores |
 | `similarity_search_with_relevance_scores(query, k)` | with normalized [0,1] scores (cosine) |
@@ -182,10 +217,11 @@ For local development, [ShannonBase](https://github.com/Shannon-Data/ShannonBase
 
 Next on my list:
 
-- Hybrid search: vector plus MySQL `FULLTEXT` keyword matching
 - Native async via an async MySQL driver (async already works through LangChain's executor fallback)
-- Relevance scores for the `dot` and `euclidean` metrics (cosine is done)
+- A relevance score for the `dot` metric, once its `DISTANCE` sign is nailed down (cosine and euclidean are done)
 - A native ANN index if MySQL or ShannonBase ship one (the approximate IVF index works today via `build_index`)
+
+Done recently: hybrid search (vector + `FULLTEXT`), euclidean relevance scores, an approximate IVF index, custom schemas, and metadata filter operators.
 
 Issues and PRs welcome.
 
