@@ -126,6 +126,59 @@ class ShannonBaseVectorStore(VectorStore):
             for r in rows
         ]
 
+    def hybrid_search(
+        self, query: str, k: int = 4, fetch_k: int = 20,
+        filter: Optional[dict] = None, vector_weight: float = 0.5, **kwargs: Any,
+    ) -> List[Document]:
+        return [
+            doc for doc, _ in self.hybrid_search_with_score(
+                query, k, fetch_k, filter=filter, vector_weight=vector_weight, **kwargs
+            )
+        ]
+
+    def hybrid_search_with_score(
+        self, query: str, k: int = 4, fetch_k: int = 20,
+        filter: Optional[dict] = None, vector_weight: float = 0.5,
+        rrf_k: int = 60, **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Combine vector similarity and keyword (FULLTEXT) matching.
+
+        Both retrievers return their top ``fetch_k`` and are fused with reciprocal
+        rank fusion: a document's score is the weighted sum of ``1 / (rrf_k + rank)``
+        across the two lists. RRF uses rank, not raw scores, so the two very
+        different scales never have to be reconciled. ``vector_weight`` in [0, 1]
+        tilts the blend (1.0 = pure vector, 0.0 = pure keyword).
+        """
+        if not 0.0 <= vector_weight <= 1.0:
+            raise ValueError("vector_weight must be between 0 and 1")
+        vector = self._embedding.embed_query(query)
+        clusters = self._probe(vector, kwargs.get("nprobe"))
+        v_rows = self._store.search(vector, fetch_k, self.metric, filter=filter, clusters=clusters)
+        k_rows = self._store.keyword_search(query, fetch_k, filter=filter)
+
+        scores: dict = {}
+        rows: dict = {}
+        for rank, r in enumerate(v_rows):
+            scores[r.id] = scores.get(r.id, 0.0) + vector_weight / (rrf_k + rank + 1)
+            rows[r.id] = r
+        for rank, r in enumerate(k_rows):
+            scores[r.id] = scores.get(r.id, 0.0) + (1.0 - vector_weight) / (rrf_k + rank + 1)
+            rows.setdefault(r.id, r)
+
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
+        return [
+            (Document(id=i, page_content=rows[i].content, metadata=dict(rows[i].metadata)), s)
+            for i, s in ranked
+        ]
+
+    def ensure_fulltext_index(self) -> None:
+        """Add the FULLTEXT index hybrid_search needs to an existing table.
+
+        Tables created by 0.6.0+ already have it. Call this once after upgrading a
+        table created by an earlier version, or when pointing at your own table.
+        """
+        self._store.ensure_fulltext_index()
+
     def get_by_ids(self, ids: Iterable[str]) -> List[Document]:
         ids = list(ids)
         found = {r.id: r for r in self._store.get(ids)}
@@ -216,9 +269,20 @@ class ShannonBaseVectorStore(VectorStore):
         # clamp to [0, 1] for the relevance-score API.
         return max(0.0, min(1.0, score))
 
+    @staticmethod
+    def _euclidean_relevance_score_fn(score: float) -> float:
+        # score is (1 - euclidean_distance) from the wrapper, so distance = 1 - score
+        # and is >= 0. Map to (0, 1] with 1 / (1 + distance): closer -> higher, bounded.
+        distance = 1.0 - score
+        return 1.0 / (1.0 + max(0.0, distance))
+
     def _select_relevance_score_fn(self):
         if self.metric == "cosine":
             return self._cosine_relevance_score_fn
+        if self.metric == "euclidean":
+            return self._euclidean_relevance_score_fn
+        # dot: DISTANCE(...,'DOT') isn't a bounded distance and the docs don't pin
+        # down its sign, so there's no honest [0, 1] mapping yet. super() raises.
         return super()._select_relevance_score_fn()
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
