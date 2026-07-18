@@ -47,13 +47,33 @@ def vector_literal(embedding: List[float]) -> str:
 
 
 def create_table_sql(s: Schema, dim: int) -> str:
+    # The FULLTEXT index on content powers hybrid_search(); it's a plain InnoDB
+    # index and sits alongside the VECTOR column without any special handling.
     return (
         f"CREATE TABLE IF NOT EXISTS `{s.table}` ("
         f"  `{s.id}` VARCHAR(36) PRIMARY KEY,"
         f"  `{s.content}` TEXT,"
         f"  `{s.metadata}` JSON,"
-        f"  `{s.embedding}` VECTOR({dim})"
+        f"  `{s.embedding}` VECTOR({dim}),"
+        f"  FULLTEXT (`{s.content}`)"
         ")"
+    )
+
+
+def add_fulltext_index_sql(s: Schema) -> str:
+    # For tables created before hybrid search existed (CREATE TABLE IF NOT EXISTS
+    # won't retrofit the index), or for a bring-your-own table.
+    return f"ALTER TABLE `{s.table}` ADD FULLTEXT INDEX `ft_{s.content}` (`{s.content}`)"
+
+
+def keyword_search_sql(s: Schema, filter_clauses=()) -> str:
+    match = f"MATCH(`{s.content}`) AGAINST(%s IN NATURAL LANGUAGE MODE)"
+    parts = list(filter_clauses)
+    parts.append(match)  # MATCH in WHERE keeps only rows that actually match
+    where = " AND ".join(parts)
+    return (
+        f"SELECT `{s.id}`, `{s.content}`, `{s.metadata}`, {match} AS score "
+        f"FROM `{s.table}` WHERE {where} ORDER BY score DESC LIMIT %s"
     )
 
 
