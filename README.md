@@ -120,6 +120,34 @@ the default minimum token length is 3 (`innodb_ft_min_token_size`), so one- and
 two-character terms are ignored, and common words on the stopword list don't match.
 Both are server settings, not something this package controls.
 
+## Async
+
+If you're in an async app, use the `a`-prefixed methods and they'll do non-blocking
+I/O through [aiomysql](https://github.com/aio-libs/aiomysql) instead of tying up the
+event loop:
+
+```python
+from langchain_shannonbase import ShannonBaseVectorStore
+
+store = ShannonBaseVectorStore(embedding=embeddings, table="documents",
+                               host="127.0.0.1", user="root", password="", database="rag")
+await store.aadd_texts(["hello world"])
+docs = await store.asimilarity_search("greeting", k=3)
+hits = await store.ahybrid_search("error E4021", k=5)
+```
+
+Install the driver with the async extra:
+
+```bash
+pip install "langchain-shannonbase[async]"
+```
+
+MySQL 9 defaults to `caching_sha2_password`, which aiomysql needs `cryptography`
+for; the extra pulls it in. `aadd_texts`, `asimilarity_search[_with_score]`,
+`aget_by_ids`, `adelete`, and `ahybrid_search` are wired to the async driver. Any
+async method you don't see here still works through LangChain's thread-pool
+fallback, and so does everything if you haven't installed the async extra.
+
 ## How it works
 
 No extensions, just MySQL 9's built-in vector support:
@@ -135,7 +163,7 @@ CREATE TABLE documents (
 -- search:  ORDER BY DISTANCE(embedding, STRING_TO_VECTOR('[...]'), 'COSINE') LIMIT k
 ```
 
-Search returns the nearest rows as LangChain `Document`s, each with a score of `1 - distance`. Cosine is the default; pass `metric="dot"` or `metric="euclidean"` if you'd rather. `similarity_search_with_relevance_scores` normalizes to [0, 1] for `cosine` and `euclidean`; `dot` isn't normalized (its `DISTANCE` semantics aren't documented, so there's no honest mapping yet).
+Search returns the nearest rows as LangChain `Document`s, each with a score of `1 - distance`. Cosine is the default; pass `metric="dot"` or `metric="euclidean"` if you'd rather. `similarity_search_with_relevance_scores` normalizes to [0, 1] for all three metrics. `dot` uses the fact that ShannonBase's `DISTANCE(...,'DOT')` is the negated inner product, so on normalized embeddings (what most models produce) the dot score matches cosine; larger inner products from non-unit vectors clamp to 1.
 
 ## Performance and scale
 
@@ -153,6 +181,12 @@ store.similarity_search("query", k=5, nprobe=10)   # scans ~ nprobe / n_lists of
 It's k-means clustering plus an indexed `cluster` column, the same idea as pgvector's `IVFFlat`, done in application logic because MySQL 9 and ShannonBase don't have a native ANN index yet. Recall is approximate and rises with `nprobe`. On clustered data the trade is steep in your favour: in the offline tests, probing 1 of 8 lists keeps recall@10 at 1.0 while scanning ~12% of rows. Real recall depends on your data, so measure with `bench/benchmark.py` on your own set.
 
 Rows added after `build_index` are assigned to their nearest centroid automatically, so the index stays correct as you keep writing. Rebuild periodically (call `build_index` again) to re-centre the clusters as the data grows.
+
+A note on native indexes, since people ask: ShannonBase and self-hosted MySQL 9 do a
+brute-force `DISTANCE` scan with no built-in ANN index (I checked the ShannonBase
+source), which is exactly why the IVF index above exists. MySQL HeatWave is the
+exception, it documents an automatic vector index; if you're on HeatWave that's
+managed server-side, so I'd lean on it there and skip `build_index`.
 
 Connections are pooled (`pool_size` defaults to 5, override it in the constructor), so repeated queries reuse connections instead of reconnecting each time.
 
@@ -217,11 +251,17 @@ For local development, [ShannonBase](https://github.com/Shannon-Data/ShannonBase
 
 Next on my list:
 
-- Native async via an async MySQL driver (async already works through LangChain's executor fallback)
-- A relevance score for the `dot` metric, once its `DISTANCE` sign is nailed down (cosine and euclidean are done)
-- A native ANN index if MySQL or ShannonBase ship one (the approximate IVF index works today via `build_index`)
+- Wire the async path to a native HeatWave vector index where one's available
+- LlamaIndex sibling package, so the same MySQL backend works outside LangChain
+- More `bench/` coverage: recall-vs-nprobe curves you can reproduce on your own data
 
-Done recently: hybrid search (vector + `FULLTEXT`), euclidean relevance scores, an approximate IVF index, custom schemas, and metadata filter operators.
+A native ANN index would be next if MySQL or ShannonBase shipped one, but neither
+does today (HeatWave's is server-side and automatic), so the IVF index via
+`build_index` is the answer until then.
+
+Done recently: native async (aiomysql), relevance scores for all three metrics,
+hybrid search (vector + `FULLTEXT`), an approximate IVF index, custom schemas, and
+metadata filter operators.
 
 Issues and PRs welcome.
 

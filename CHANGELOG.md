@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0
+- Native async via aiomysql: `aadd_texts`, `asimilarity_search[_with_score]`,
+  `aget_by_ids`, `adelete`, and `ahybrid_search` use non-blocking I/O instead of
+  LangChain's thread-pool fallback. Install with the `[async]` extra. Falls back to
+  the executor when no async-capable backend is configured.
+- Relevance scores for the `dot` metric. ShannonBase's `DISTANCE(...,'DOT')` is the
+  negated inner product (confirmed from source), so on normalized embeddings the dot
+  relevance score matches cosine exactly; unbounded inner products clamp to [0, 1].
+- `InMemoryStore` now honors `metric` (cosine / dot / euclidean) instead of always
+  computing cosine, so offline results match the real backend for every metric.
+- Docs: note on native indexes. ShannonBase / self-hosted MySQL have no ANN index
+  (use the built-in IVF index); MySQL HeatWave documents an automatic vector index.
+
 ## 0.6.0
 - Hybrid search: `hybrid_search(query, k, vector_weight=...)` blends vector
   similarity with MySQL `FULLTEXT` keyword matching using reciprocal rank fusion,
