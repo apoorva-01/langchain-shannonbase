@@ -105,3 +105,20 @@ def test_custom_columns_accepted():
     # Column names flow into the Schema without error, even with the in-memory store.
     ShannonBaseVectorStore(embedding=HashEmbeddings(), store=InMemoryStore(),
                            id_column="doc_id", content_column="body", create_table=False)
+
+
+def test_euclidean_relevance_fn_bounded_and_monotonic():
+    fn = ShannonBaseVectorStore._euclidean_relevance_score_fn
+    # score = 1 - distance, so smaller score means larger distance.
+    r0 = fn(1.0)   # distance 0
+    r1 = fn(0.0)   # distance 1
+    r2 = fn(-1.0)  # distance 2
+    assert r0 == 1.0
+    assert 0.0 < r2 < r1 < r0 <= 1.0  # closer -> higher, all in (0, 1]
+
+
+def test_dot_metric_has_no_relevance_score_fn():
+    vs = ShannonBaseVectorStore(embedding=HashEmbeddings(), store=InMemoryStore(), metric="dot")
+    vs.add_texts(["a"], ids=["1"])
+    with pytest.raises(NotImplementedError):
+        vs.similarity_search_with_relevance_scores("a", k=1)

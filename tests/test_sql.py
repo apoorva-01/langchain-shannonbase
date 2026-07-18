@@ -51,3 +51,21 @@ def test_bad_identifier_is_rejected():
 def test_distance_to_score():
     assert _sql.distance_to_score(0.0) == 1.0
     assert _sql.distance_to_score(0.25) == 0.75
+
+
+def test_create_table_has_fulltext_index():
+    assert "FULLTEXT (`content`)" in _sql.create_table_sql(S, 8)
+
+
+def test_keyword_search_uses_fulltext_match():
+    sql = _sql.keyword_search_sql(S)
+    assert "MATCH(`content`) AGAINST(%s IN NATURAL LANGUAGE MODE)" in sql
+    assert "ORDER BY score DESC LIMIT %s" in sql
+
+
+def test_keyword_search_binds_filter_clauses():
+    sql = _sql.keyword_search_sql(S, filter_clauses=["`metadata`->>'$.lang' = %s"])
+    # filter clause AND the match predicate: one %s for the SELECT match, one for
+    # each filter clause, one for the WHERE match, one for LIMIT.
+    assert sql.count("%s") == 4
+    assert "lang" in sql
