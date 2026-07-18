@@ -182,11 +182,22 @@ It's k-means clustering plus an indexed `cluster` column, the same idea as pgvec
 
 Rows added after `build_index` are assigned to their nearest centroid automatically, so the index stays correct as you keep writing. Rebuild periodically (call `build_index` again) to re-centre the clusters as the data grows.
 
-A note on native indexes, since people ask: ShannonBase and self-hosted MySQL 9 do a
-brute-force `DISTANCE` scan with no built-in ANN index (I checked the ShannonBase
-source), which is exactly why the IVF index above exists. MySQL HeatWave is the
-exception, it documents an automatic vector index; if you're on HeatWave that's
-managed server-side, so I'd lean on it there and skip `build_index`.
+### Native indexes and HeatWave
+
+People ask why there's an app-side index at all, so: ShannonBase and self-hosted
+MySQL 9 do a brute-force `DISTANCE` scan with no built-in ANN index (I read the
+ShannonBase source to be sure). That's exactly why the IVF index above exists.
+
+MySQL HeatWave is the exception. As of HeatWave 9.5.0 it builds an HNSW vector index
+automatically in the background for frequently-queried `VECTOR` columns, and applies
+it transparently to `ORDER BY DISTANCE(...) LIMIT k` queries. That's the exact shape
+this library emits, so on HeatWave your existing `similarity_search` picks up the
+native index with no code change and no DDL. **Don't call `build_index` on HeatWave**,
+the IVF index is only for backends that lack a native one.
+
+Recall vs. latency on HeatWave is tuned server-side with the `rapid_hnsw_ef_search`
+session variable (higher is more accurate, slower); it's a HeatWave setting, not
+something this library manages.
 
 Connections are pooled (`pool_size` defaults to 5, override it in the constructor), so repeated queries reuse connections instead of reconnecting each time.
 
@@ -251,13 +262,12 @@ For local development, [ShannonBase](https://github.com/Shannon-Data/ShannonBase
 
 Next on my list:
 
-- Wire the async path to a native HeatWave vector index where one's available
 - LlamaIndex sibling package, so the same MySQL backend works outside LangChain
 - More `bench/` coverage: recall-vs-nprobe curves you can reproduce on your own data
 
-A native ANN index would be next if MySQL or ShannonBase shipped one, but neither
-does today (HeatWave's is server-side and automatic), so the IVF index via
-`build_index` is the answer until then.
+On native ANN indexes: HeatWave already builds one automatically and this library's
+queries use it transparently (see above). ShannonBase and self-hosted MySQL don't
+have one, so the IVF index via `build_index` is the answer there until they do.
 
 Done recently: native async (aiomysql), relevance scores for all three metrics,
 hybrid search (vector + `FULLTEXT`), an approximate IVF index, custom schemas, and
