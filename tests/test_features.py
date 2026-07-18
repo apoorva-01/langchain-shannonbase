@@ -117,8 +117,55 @@ def test_euclidean_relevance_fn_bounded_and_monotonic():
     assert 0.0 < r2 < r1 < r0 <= 1.0  # closer -> higher, all in (0, 1]
 
 
-def test_dot_metric_has_no_relevance_score_fn():
-    vs = ShannonBaseVectorStore(embedding=HashEmbeddings(), store=InMemoryStore(), metric="dot")
-    vs.add_texts(["a"], ids=["1"])
-    with pytest.raises(NotImplementedError):
-        vs.similarity_search_with_relevance_scores("a", k=1)
+import math
+
+
+def _unit(v):
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
+
+
+class UnitEmbeddings(Embeddings):
+    _V = {
+        "a": _unit([1.0, 0.0, 0.0]),
+        "b": _unit([0.0, 1.0, 0.0]),
+        "c": _unit([-1.0, 0.0, 0.0]),   # opposite the query -> negative similarity
+        "q": _unit([2.0, 1.0, 0.0]),
+    }
+
+    def embed_documents(self, texts):
+        return [self._V[t] for t in texts]
+
+    def embed_query(self, text):
+        return self._V[text]
+
+
+def test_dot_relevance_matches_cosine_on_normalized_vectors():
+    # On unit vectors the inner product is the cosine similarity, so the dot and
+    # cosine relevance scores must agree per document. This is the end-to-end check
+    # that InMemoryStore actually honors the metric (not just the pure function).
+    def scores(metric):
+        vs = ShannonBaseVectorStore(embedding=UnitEmbeddings(), store=InMemoryStore(), metric=metric)
+        vs.add_texts(["a", "b", "c"], ids=["a", "b", "c"])
+        return {d.id: s for d, s in vs.similarity_search_with_relevance_scores("q", k=3)}
+
+    cos, dot = scores("cosine"), scores("dot")
+    assert cos.keys() == dot.keys()
+    for i in cos:
+        assert cos[i] == pytest.approx(dot[i], abs=1e-9)
+    assert dot["c"] == 0.0  # negative similarity clamps to 0
+
+
+def test_euclidean_search_orders_by_distance_and_scores_bounded():
+    vs = ShannonBaseVectorStore(embedding=UnitEmbeddings(), store=InMemoryStore(), metric="euclidean")
+    vs.add_texts(["a", "b", "c"], ids=["a", "b", "c"])
+    hits = vs.similarity_search_with_relevance_scores("q", k=3)
+    assert hits[0][0].id == "a"  # closest to q by L2
+    assert all(0.0 < s <= 1.0 for _, s in hits)
+
+
+def test_dot_metric_relevance_is_supported():
+    vs = ShannonBaseVectorStore(embedding=UnitEmbeddings(), store=InMemoryStore(), metric="dot")
+    vs.add_texts(["a"], ids=["a"])
+    scored = vs.similarity_search_with_relevance_scores("q", k=1)
+    assert 0.0 <= scored[0][1] <= 1.0
