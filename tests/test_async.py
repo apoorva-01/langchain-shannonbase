@@ -69,6 +69,16 @@ async def test_async_with_score_returns_similarity():
     assert score == 1.0  # identical vector -> cosine distance 0 -> score 1
 
 
+async def test_async_delete_by_filter():
+    vs = _store()
+    await vs.aadd_texts(["banana smoothie", "banana", "python tutorial"],
+                        metadatas=[{"g": "fruit"}, {"g": "fruit"}, {"g": "lang"}],
+                        ids=["1", "2", "3"])
+    assert await vs.adelete(filter={"g": "fruit"}) is True
+    remaining = {d.id for d in await vs.asimilarity_search("banana", k=5)}
+    assert remaining == {"3"}
+
+
 def test_aiomysql_store_constructs_and_mirrors_sql():
     # No live database, but this catches import/typo breakage in the aiomysql path
     # and confirms it exposes the async store surface the vector store delegates to.

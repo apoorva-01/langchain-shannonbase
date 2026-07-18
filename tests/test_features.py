@@ -164,6 +164,22 @@ def test_euclidean_search_orders_by_distance_and_scores_bounded():
     assert all(0.0 < s <= 1.0 for _, s in hits)
 
 
+def test_delete_by_filter_removes_matching_rows():
+    vs = _store()
+    vs.add_texts(["a", "b", "c"],
+                 metadatas=[{"doc": "x"}, {"doc": "x"}, {"doc": "y"}], ids=["1", "2", "3"])
+    assert vs.delete(filter={"doc": "x"}) is True
+    remaining = {d.id for d in vs.similarity_search("anything", k=5)}
+    assert remaining == {"3"}
+
+
+def test_delete_with_empty_filter_is_a_noop():
+    vs = _store()
+    vs.add_texts(["a"], metadatas=[{"doc": "x"}], ids=["1"])
+    vs.delete(filter={})  # must not wipe the table
+    assert {d.id for d in vs.similarity_search("a", k=5)} == {"1"}
+
+
 def test_dot_metric_relevance_is_supported():
     vs = ShannonBaseVectorStore(embedding=UnitEmbeddings(), store=InMemoryStore(), metric="dot")
     vs.add_texts(["a"], ids=["a"])
